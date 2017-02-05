@@ -1,0 +1,178 @@
+---
+title: 'DATA 607:  Week 2 Assignment, Connecting to SQL'
+author: 'Tom Detzel, Spring 2017'
+date: "2/5/2017"
+output:
+  html_document:
+    theme: lumen
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+
+library(pander)
+panderOptions("digits", 2)
+panderOptions("table.style", "rmarkdown")
+panderOptions("table.alignment.default", "left")
+
+```
+
+## Introduction
+This assignment is a refresher on SQL and an exercise in connecting to a database program using R. In this case, we set up a PostgreSQL database on a free cloud service, ElephantSQL, and used the RPostgreSQL package to make a connnection, fetch data using SQL commands, and prepare, analyze and plot it.
+
+Code for this assignment is based on examples in R and help files for RPostgreSQL and ElephantSQL. The password for the db connection will be blanked out in the .rmd file posted on github; I will supply it in the private Blackboard submission.
+
+
+### Set up the R workspace  
+
+We'll be using seven R packages in this excercise.  
+
+```{r, eval=F, messages=FALSE, warnings=FALSE}
+
+if (!require('dplyr')) install.packages('dplyr')
+if (!require("ggplot2")) install.packages('ggplot2')
+if (!require("knitr")) install.packages('knitr')
+if (!require("RPostgrSQL")) install.packages('RPostgreSQL')
+if (!require("ggthemes")) install.packages('ggthemes')
+if (!require("pander")) install.packages('pander')
+if (!require("tidyr")) install.packages('tidyr')
+
+```
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+library(dplyr)
+library(ggplot2)
+library(ggthemes)
+library(RPostgreSQL)
+library(knitr)
+library(tidyr)
+
+```
+
+***  
+
+### Connect to postgres database stored on ElephantSQL
+
+*RPostgreSQL* reports that the connection is open and the table we want exists.  
+
+```{r, echo=FALSE, message=FALSE, warnings=FALSE}
+
+# db password
+pw <- "SEE BLACKBOARD"
+
+```
+
+```{r, messages=F, warnings=F}
+
+# loads the PostgreSQL driver
+drv <- dbDriver("PostgreSQL")
+
+# connect to the postgres db, normal setup
+con <- dbConnect(drv, dbname = "hlkofihe",
+                 host = "babar.elephantsql.com", port = 5432,
+                 user = "hlkofihe", password = pw)
+
+# check for the table
+dbExistsTable(con, "reviews")
+
+```
+
+***  
+
+### Pull data into R for processing  
+
+A select query fetches the results from the table "reviews" in the remote database, and we check to be sure the connection is closed.
+
+```{r, messages=F, warnings=F}
+
+# get the data in the ratings table
+results <- dbGetQuery(con, "SELECT * FROM reviews")
+
+# close connection
+dbDisconnect(con)
+
+# view results
+str(results)
+
+```
+*** 
+
+### Transform into tidyr data frame  
+
+The data is in a poor format for analysis. We need a new variable "Rater" so we can compare ratings by reviewer. The *tidyr* package function *gather* helps reorganize the data into a usable format.
+
+```{r, messages=F, warnings=F}
+
+# make it a real data frame
+results2 <- gather(results, Rater, value=Rating, Julie, Mike, Paul, Beth, Dave, Jane)
+
+knitr::kable(head(results2), caption = "The Transformed Data, Rows 1-6")
+
+```
+
+***  
+### Movie rating summary  
+
+We use *dplyr* to group and calculate some simple mean ratings for movies and reviewers. For fun, we compare table output from both *kable* and *pander*.  
+
+```{r}
+
+reslts2 <- tbl_df(results2)
+
+raters <- ungroup(results2) %>%
+            group_by(Rater) %>%
+            summarise(Reviews = n(), Mean_Rating = round(mean(Rating), 2)) %>%
+            arrange(desc(Mean_Rating))
+
+movies <- ungroup(results2) %>%
+            group_by(Movie) %>%
+            summarise(Reviews = n(), Mean_Rating = round(mean(Rating), 2)) %>%
+            arrange(desc(Mean_Rating))
+
+# knitr::kable(raters, caption = "Reviewers: Average Ratings")
+
+pander(raters, caption = "Reviewers: Average Ratings", justify = c("left", "left", "left"), split.cells = c(20, 10, 10))
+
+## knitr::kable(movies, caption = "Movies: Average Ratings")
+
+pander(movies, caption = "Movies: Average Ratings", justify = c("left", "left", "left"), split.cells = c(20, 10, 10))
+
+```
+
+
+***  
+
+### Movie rating plots  
+
+The plots below show ratings for each movie from each reviwer and the distribution of ratings by reviewer. Female reviewers gave sharply higher ratings.
+
+```{r, messages=F, warnings=F}
+
+# try some plots
+
+# ggplot(results2, aes(x=Rater, fill=Rating)) + geom_density(alpha=.3)
+
+ggplot(results2, aes(x=Movie, y=Rating, colour=Rater)) +
+    geom_jitter(size = 3.5, aes(shape = Rater), width = .6, height = .5) +
+    labs(title = "Reviewer Ratings Compared") +
+    theme_solarized_2()
+```
+
+***
+
+```{r, messages=F, warnings=F}
+
+ggplot(results2, aes(x=Rater, y=Rating)) + geom_boxplot(fill="lightblue") +
+    guides(fill=FALSE) +
+    labs(title = "Reviewer Ratings Distribution") +
+    theme_solarized_2()
+
+```
+
