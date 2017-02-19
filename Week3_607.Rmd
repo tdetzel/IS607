@@ -1,0 +1,254 @@
+---
+title: 'DATA 607:  Week 3 Assignment, Regular Expressions'
+author: 'Tom Detzel, Spring 2017'
+date: "2/18/2017"
+output:
+  html_document:
+    theme: lumen
+    toc: yes
+---
+
+<br>
+
+### Workspace Prep  
+
+We'll be using three R packages in this excercise on string handling and regular expressions.
+
+```{r, echo=T, eval=T, message=FALSE, warning=FALSE}
+
+# if (!require("knitr", character.only=TRUE)) install.packages('knitr')
+# if (!require("pander", character.only=TRUE)) install.packages('pander')
+# if (!require("stringr", character.only=TRUE)) install.packages('stringer')
+
+library(knitr)
+library(stringr)
+library(pander)
+ panderOptions("digits", 2)
+ panderOptions("table.style", "rmarkdown")
+ panderOptions("table.alignment.default", "left")
+
+```
+
+```{r, echo = TRUE, message=FALSE, warning=FALSE}
+
+```
+
+<br>
+***  
+
+### Problem 3 -- Part 1
+
+In this part, we are tasked to extract names from a mixed character string and order them in "first-last" format. First we import the raw data as directed. We'll echo the code.
+
+```{r, echo=TRUE, message=FALSE, warnings=FALSE}
+
+raw <- "555-1239Moe Szyslak( 636) 555-0113Burns, C. Montgomery555 -6542Rev. Timothy Lovejoy555 8904Ned Flanders636-555-3226Simpson, Homer5553642Dr. Julius Hibbert"
+
+raw
+```
+
+Next we extract the names using regular expressions. We are purposely leaving out the commas along with numeric characters.
+
+```{r, echo=TRUE, message=FALSE, warnings=FALSE}
+
+names <- unlist(str_extract_all(raw, "[[:alpha:].]{2,}"))
+names
+
+```
+
+After examining the names, we see that Burns and Simpson are in reverse order. So we use the pmatch() function in base R to find their positions and then reverse them with R's replace() function. Now the names vector is in the proper order.
+
+```{r, echo=TRUE, message=FALSE, warnings=FALSE}
+
+burns_pos <- pmatch(c("Burns", "C.", "Montgomery"), names)
+homer_pos <- pmatch(c("Simpson", "Homer"), names)
+
+names2 <- names
+names2 <- replace(names2, c(burns_pos, homer_pos), names2[c(rev(burns_pos), rev(homer_pos))])
+
+## now the vector contains names in the proper sequence
+names2
+
+```
+
+Now let's put the titles and first and last names together. Unfortunately, there's no easy way to do this because some names have three parts and some have only two. Since our list is short, we won't bother with writing an elaborate script to parse names. str_c() will do.
+
+```{r, echo=TRUE, message=FALSE, warnings=FALSE}
+
+names3 <- c(str_c(names2[[1]], names2[[2]], sep=" "),
+            str_c(names2[[3]], names2[[4]], names2[[5]], sep=" "),
+            str_c(names2[[6]], names2[[7]], names2[[8]], sep=" "),
+            str_c(names2[[9]], names2[[10]], sep=" "),
+            str_c(names2[[11]], names2[[12]], sep=" "),
+            str_c(names2[[13]], names2[[14]], names2[[15]], sep=" "))
+
+names3
+
+```
+
+
+***
+### Problem 3 -- Part 2
+  
+We are asked to construct a logical vector showing whether a name has a title, such as "Dr." or "Rev." The base R function grepl() returns a logical vector for a character match. A simple approach is to create a vector of common titles and grepl(). But note that "M.", a common in Europe, requires using an escape character. Also note that grepl() needs the pipe operator to iterate over the list of titles. 
+
+```{r, messages=F, warnings=F}
+
+titles <- c("Rev.", "Dr.", "Mr.", "Ms.", "M\\.", "Mrs.", "Hon.")
+
+grepl(paste(titles, collapse='|'), names3)
+
+```
+
+***  
+
+### Problem 3 -- Part 3  
+  
+Construct a logical vector indicating whether a character has a second name. The question is ambiguous. Every character has a first and second (last) name. Some also have a title or middle initial. Do we want just characters with two names and no initials or titles? Though unclear, we'll assume that's the solution.
+
+Characters with two names and no title or middle initial have only a single space separating the names. So we'll use a regexp to find names with more than one space.
+
+```{r, messages=F, warnings=F}
+
+grepl("[[:blank:]]{1}.+[[:blank:]]", names3)
+
+```
+
+"True" indexes to characters with three name parts.
+
+```{r, messages=F, warnings=F}
+
+names3
+
+```
+
+<br>  
+
+*** 
+
+### Problem 4
+Translate each of the following regular expressions into English. What do they match? 
+<br>  
+  
+#### *A. [0-9]+\\$*
+
+**Translation:** One or more digits between 0 and 9 at the end of a string. (But you don't need to escape the '$'.)
+
+```{r, messages=F, warnings=F}
+
+test <- c("555", "some text", "423855", "text789", "222-222-text-22")
+
+unlist(str_extract_all(test, "[0-9]+$"))
+
+```
+***  
+<br>  
+
+#### *B. \\b[a-z]{1,4}\\b*
+  
+**Translation:** Words of 1-4 characters a-z.
+
+```{r, messages=F, warnings=F}
+
+test <- "All is well that ends well, that is what Shakespeare said."
+
+unlist(str_extract_all(test, "\\b[a-z]{1,4}\\b"))
+
+```
+***  
+<br>
+  
+#### *C. .*?\\.txt$*
+
+**Translation:** Any character zero or more times with ".txt" at the end.
+
+```{r, messages=F, warnings=F}
+
+test <- c("607homework.txt", "excel_file.xls", "word_file.doc", "222-444.txt")
+
+unlist(str_extract_all(test, ".*?\\.txt$"))
+
+```
+ *** 
+<br>
+  
+#### *D. \\d{2}/\\d{2}/\\d{4}*
+
+**Translation:** Date format: 00/00/0000
+
+
+```{r}
+
+test <- c("01/01/2017", "02/17/2017", "May 5, 1955", "ma/xy/2222")
+
+unlist(str_extract_all(test, "\\d{2}/\\d{2}/\\d{4}"))
+
+```
+***  
+ <br>
+  
+#### *E. <(.+?)>.+?</\\1>*
+
+**Translation:** Captures html tags, uses backreferencing '\\1' to capture the same tag found earlier. See example.
+
+```{r}
+
+test <- c("<head>abcd</head>", "<body> some text </body>", letters, rep(1:5, 5), "The times they are a changin'", "what/is/the/meaning")
+
+unlist(str_extract_all(test, "<(.+?)>.+?</\\1>"))
+
+```
+
+<br>
+
+***
+  
+### Problem 9 -- Extra Credit  
+
+All CAPS is the big clue. After that, it's str_replace() to fix the punctuation!
+
+```{r, messages=F, warnings=F}
+
+# paste in the text
+msgtxt <- paste("clcopCow1zmstc0d87wnkig7OvdicpNuggvhryn92Gjuwczi8hqrfpRxs5Aj5dwpn0Tanwo Uwisdij7Lj8kpf03AT5Idr3coc0bt7yczjatOaootj55t3Nj3ne6c4Sfek.r1w1YwwojigO d6vrfUrbz2.2bkAnbhzgv4R9i05zEcrop.wAgnb.SqoU65fPa1otfb7wEm24k6t3sR9zqe5 fy89n6Nd5t9kc4fE905gmc4Rgxo5nhDk!gr")
+
+# see if caps matter
+secret <- unlist(str_extract_all(msgtxt, "[[:upper:][:punct:][?]]"))
+
+# unlist(str_extract_all(msgtxt, "[[:upper:][:punct:][?]]"))
+
+# str_c(secret, collapse = "")
+
+# fix punctuation step one
+secret2 <- str_replace(str_c(secret, collapse = ""), "[.]", ". ")
+
+# and step 2
+secret2 <- str_replace_all(secret2, "([.])", c( " "))
+str_replace_all(secret2, "(S[:space:])", c("S!"))
+
+
+```
+
+
+```{r, include=F, eval=F}
+grepall <- function(pattern, x, ignore.case=FALSE, perl=FALSE, fixed=FALSE,
+                    useBytes=FALSE, value=FALSE, logic=FALSE){
+                    
+                  # error and exception handling
+                      if(length(pattern)==0 | length(x)==0) {
+                        warning("length of pattern or data equals zero.")
+                          return(NULL)
+                        }
+                    
+                  # apply grepl() and all()
+                    indices <- sapply(pattern, grepl, x,
+                                    ignore.case, perl, fixed, useBytes)
+                    index <- apply(indices, 1, all)
+                  
+                  # indexation and return of results
+                    if(logic==T) return(index)
+                    if(value==F) return((1:length(x))[index])
+                    if(value==T) return(x[index])
+}
+
+```
