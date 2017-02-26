@@ -1,0 +1,170 @@
+---
+title: 'DATA 607: Week 5, Tidy Data'
+author: "Tom Detzel, Feb. 23, 2017"
+output:
+  html_document:
+    theme: lumen
+    toc: yes
+---
+
+<br>
+
+***
+
+### Intro
+This week an exercise in tidying data. We're provided a messy csv table. The goal is to transform it into an analyzable table where each row is a single observation and each column a single variable.  
+  
+
+***
+
+### 1. Data Import and Setup
+In this step, we load the necessary R packages and import the data with **read.csv()**. With the structure command, we can see that the flight counts were properly imported as integers and that airline and status correctly are factors. Table 1 shows the initial table.
+
+```{r echo=T, warning=F, message=F}
+
+# load libraries
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(pander)
+
+# import the data
+adat <- read.csv("Data/airlines.csv", header=T)
+str(adat)
+```
+
+```{r echo=F, message=F, warning=F}
+
+pander(head(adat), caption = "Table 1: Original airline data")
+
+```
+
+
+***
+### 2. First steps  
+The table contains empty rows and cells. Rows don't represent single observations. The variables airline, deparature status and city are spread across multiple columns. Next steps involve removing empty cells and rows, renaming variables, and gathering data using **tidyr()**. 
+
+#### 2.1 Clean up empty cells, fix variable names
+Delete the empty row and populate the airline name in the rows indicating "delayed" status.
+
+```{r}
+
+adat <- adat[-3,]
+adat[2,1] <- "ALASKA"
+adat[4,1] <- "AM WEST"
+colnames(adat)[c(1,2)] <- c("Airline", "Status")
+rownames(adat) <- 1:4
+
+pander(adat, caption = "Table 2: Blank/NA cells cleaned up")
+```
+
+#### 2.2 Gather wide data  
+City should be a variable, and the status counts should be the value for each observation. This is a job for tidyr's **gather()** function.  
+  
+```{r warning=F, message=F}
+
+adat <- adat %>%
+          gather(City, Flights, 3:7)
+
+# clean up the city names
+adat$City <- str_replace(adat$City, "\\.", " ")
+
+pander(head(adat, 10), caption = "Table 3: Tidy data, 10 rows")
+
+```
+  
+***  
+
+### 3. One last step: Spread() the data
+The data as of the last procedure is better; it is tidy, but it can be even tidier. We can see that there is redundancy in the Status column, where we repeat the "on time" and "delayed" values. The **spread()** function can get us further -- to 10 rows and 4 variables instead of 20 rows and 4 variables.
+
+```{r message=F, warning=F}
+
+adat2 <- spread(adat, Status, Flights)
+
+pander(adat2, caption = "Table 3: Tidiest Data Set")
+
+```
+
+***
+
+### 4. Analysis with dplyr()
+The data is now in a suitable format: one observation in each row, one variable per column. **dplyr's** pipe operator **%>%** allows flexibility in organizing the data and computing a variety of statistical measures that can be plotted. For this plot, we use dplyr to group by city and compare a count of delayed and on-time flights. 
+
+```{r eval=T, warning=F, message=F, fig.cap="Flight Status by City"}
+
+by_city <- adat %>%
+             group_by(City, Status) %>%
+             summarise(Flights=sum(Flights))
+
+ggplot(by_city, aes(x=City, y=Flights, fill=Status)) +
+        geom_bar(stat="identity", position=position_dodge()) +
+        xlab(" ") + scale_y_continuous(labels=scales::comma) +
+        theme_tufte()
+
+```
+
+#### 4.1 Create new statistic with summarise()
+Let's compute each airline's ratio of delayed flights and plot it. 
+
+```{r message=F, warning=F, fig.cap = "Percent of flight delays"}
+
+adat2 <- tbl_df(adat2)
+colnames(adat2)[c(3,4)] <- c("Delayed", "Timely")
+
+delayrate <- ungroup(adat2) %>% 
+                group_by(Airline, City) %>% 
+                summarise(Delay.Rate = sum(Delayed)/sum(Timely))
+
+ggplot(delayrate, aes(x=City, y=Delay.Rate, fill=Airline)) +
+        geom_bar(stat="identity", position=position_dodge()) +
+        xlab(" ") + scale_y_continuous(labels=scales::percent) +
+        ylab("Delay Rate") +
+        theme_tufte()
+
+
+```
+
+***
+
+### Coda
+
+There are many more functions in the **dplyr-tidyr** universe. **mutate()** makes for easy creation of new variables, similar to the Delay Rate example above. **filter()** allows applicaiton of logical functions to rows. A range of **window functions** can be applied to each item in a column, similar base R's apply family of functions. Following are some examples.  
+
+#### Make a new variable
+```{r}
+
+adat2 <- mutate(adat2, Total = Delayed + Timely)
+
+pander(head(adat2), caption = "New variable added")
+
+```
+
+#### Filter and select results
+
+```{r}
+
+big_flights <- ungroup(adat2) %>% 
+                  filter(Airline == 'AM WEST', Total > 500) %>% 
+                  select(Airline, City, Total) %>% 
+                  arrange(desc(Total))
+
+pander(big_flights, caption = "AM West cities with 500+ flights") 
+
+```
+
+#### Apply a window function
+
+```{r}
+
+adat2 <- mutate(adat2, Rank = dense_rank(Total), PctRank = percent_rank(Total))
+  
+pander(ungroup(adat2) %>% 
+        select(-PctRank) %>% 
+        arrange(desc(Rank)), caption = "dplyr rank function")
+
+```
+
