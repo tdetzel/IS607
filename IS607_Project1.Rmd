@@ -1,0 +1,232 @@
+---
+title: 'DATA 607: Project 1: Regular Expressions'
+author: 'Tom Detzel'
+date: "2/23/2017"
+output:
+  html_document:
+    theme: lumen
+    toc: yes
+---
+
+<br>
+
+### Introduction
+
+This project calls for parsing a raw text file composed of chess tournament scores. Specs call or retrieving each player's name, state, total points and pre-tournament rating, then calculating the average pre-tournament rating for each player's opponents.
+The refined data are to be exported in a .csv file for use elsewhere. 
+
+<br>
+
+***
+
+### 1. Setup and Data
+We will use eight R packages. Most of the work will involve regular expressions in conjunction with extract_all function in **stringr()**. For fun, we'll plot some of the cleaned-up data using ggplot2().
+
+Here is the list of packages followed by a peek at the original fixed-width text file.
+
+```{r warning=FALSE, message=FALSE}
+
+library(knitr)
+library(stringr)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(pander)
+ panderOptions("digits", 0)
+ panderOptions("table.style", "rmarkdown")
+ panderOptions("table.alignment.default", "left")
+ 
+```
+<br>
+
+#### 1.1 The raw data
+Each player's information is organized in tabular fashion and split across multiple lines. Our strategy is to split the data vertically into two parts by creating an index, then parsing each portion to get the information we need.
+
+```{r echo=T, warning=F, message=FALSE}
+
+input <- readLines("tournamentinfo.txt")
+head(input, 12)
+
+# create an index to separate the first and second player lines
+idx.player <- seq.int(5, 196, by = 3 )
+idx.state <- seq.int(6, 195, by = 3)
+
+# separate the two parts
+player <- input[idx.player]
+states <- input[idx.state]
+
+```
+
+<br>
+
+***
+### 2. Regular expressions
+We've created two text objects, "player" and "states", each containing some of the data we want. This a job for regular expressions and **str_extract_all()**. We put what we want into temporary storage so we can reunite it later in an R dataframe. It took some fiddling to get the proper regular expression for capturing the names. 
+
+```{r warning=F, message=F, echo=T }
+
+# get the player and opponent IDs from the player object
+id <- "(\\d{1,2}\\.?\\d*)"
+ids <- str_extract_all(player, id)
+
+# get the names from player
+name <- "([:alpha:]{2,})(([:blank:][[:alpha:]-?]{1,})?)+"
+names <- str_extract_all(player, name)
+
+# get the pre-rating from states
+prerate <- ":\\s+\\d{3,4}"
+rates <- str_extract_all(states, prerate)
+rates <- str_extract_all(rates, "\\d+")
+
+# get the state names from state
+state <- "^\\s+[:alpha:]{2}"
+state.names  <- str_trim(str_extract_all(states, state))
+
+```
+<br>
+
+#### 2.1 Extracted data
+Here's a peek at the extracted material.  
+
+```{r echo=F, message=F, warning=F}
+pander(head(names, 4))
+pander(head(rates, 4))
+pander(head(ids, 4))
+pander(head(state.names, 4))
+```
+
+<br>
+
+***
+### 3. Combine our results   
+We can now put the filtered material into an R dataframe for export and to compute the average opponent ratings. This step also involves transforming data types. Some players recorded fewer than seven games, so we have to fill NA in those columns.
+
+```{r messages=F, warning=F}
+
+# first the simple lists
+chessdb <- data.frame(cbind(names, state.names, rates))
+chessdb$state.names <- as.factor(unlist(chessdb$state.names))
+chessdb$names <- as.factor(unlist(chessdb$names))
+chessdb$rates <- as.numeric(unlist(chessdb$rates))
+
+# include NA values; StackOverflow helped with some of this code
+n.obs <- sapply(ids, length)  
+seq.max <- seq_len(max(n.obs))
+id.vars <- as.data.frame(t(sapply(ids, "[", i = seq.max)), stringsAsFactors=F)
+id.vars[, c(1:9)] <- lapply(id.vars[, c(1:9)], as.numeric)
+
+# put them together, deleting an unneeded ID column
+chessdb2 <- cbind(chessdb, id.vars[, -1])
+colnames(chessdb2)[1:4] <- c("Name", "State", "Pre.Rating", "Total.Pts")
+
+```
+#### 3.1 Extracted data
+Here's a view of the data frame in R. I'm following Google's style for R variable names (though I honestly don't care for the dot.) The variables V2-V9 will be used in the next step to index player pre-ratings and compute the opponent average.  
+  
+```{r warning=F, message=F, echo=F}
+
+head(chessdb2, 4)
+
+```
+
+<br>
+
+***
+
+### 4. Compute Opponents' Mean Rating  
+This step required writing a bespoke function to look up the pre-match rating for each contestant's opponents, then calculate their average rating. The apply family of functions didn't seem to work no matter what I tried.  
+
+```{r echo=T, warning=F, message=F}
+
+get.score2 <- function(db){
+  # computes the average score for a contestant's opponent
+  # 
+  # Args:
+  #   db: a dataframe, in this case our bespoke df dervied from tournamentinfo.txt
+  # 
+  # Note: Not applicable generally; this is crafted just for this purpose
+  # Returns: A vector of average scores  
+  
+              list <- NULL
+              for (i in 1:nrow(db)){
+                num <- 0
+                denom <- 0
+                for (j in 5:11){
+                  opponent <- as.numeric(db[i,j])
+                  if (is.na(opponent)){             # exits the loop on NA value
+                    next
+                  } else {}
+                  rating <- db[opponent, 3]
+                  num <- num + rating
+                  denom <- denom + 1
+                  }
+                avg <- round(num/denom, 0)
+                list <- append(list, avg)
+                }
+              return(list)
+              }
+
+# append the result to our working data frame
+chessdb2$Opp.Avg <- get.score2(chessdb2)
+
+```
+
+#### 4.1 The filtered data
+The data is ready for export to csv.  
+
+```{r, echo=F, warning=F, message=F}
+head(chessdb2[, c(1:4, 12)])
+       
+```
+
+<br>
+
+***
+
+### 5. Export to .csv
+The most trivial step in the process. 
+
+```{r}
+# export our csv file
+write.csv(chessdb2, "chess.csv")
+list.files()[1]
+
+```
+
+<br>
+
+***
+
+### 6. Scatterplot of scores
+Players' pre-contest ratings have a mild positive correlation (`r round(with(chessdb2, cor(Pre.Rating, Opp.Avg, method="pearson")),3)`) with opponents' average rating. T
+
+```{r}
+# for fun, try a plot
+
+mytufte <- theme_set(theme_tufte())
+mytufte <- theme_update(axis.title.x = element_text(hjust=0.07),
+                        axis.title.y = element_text())
+
+ggplot(chessdb2, aes(x=Pre.Rating, y=Opp.Avg)) +
+  geom_point(aes(color=State), size=2) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_continuous(labels = scales::comma) +
+  geom_smooth(method='lm', level=.90) +
+  xlab("Pre-match Rating") + ylab("Opponent Mean Rating") +
+  theme_set(mytufte)
+
+```
+
+<br>
+
+***
+
+### Notes
+
+This [regular expression guide](http://gastonsanchez.com/Handling_and_Processing_Strings_in_R.pdf) by Gaston Sanchez was very instructive.
+
+So was [RegExr.com](http://regexr.com/).
+
+And this [post on StackOverflow](http://stackoverflow.com/questions/15201305/how-to-convert-a-list-consisting-of-vector-of-different-lengths-to-a-usable-data).
+
+Finally, [Google's R style guide](https://google.github.io/styleguide/Rguide.xml#functiondocumentation).
