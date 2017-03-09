@@ -1,0 +1,335 @@
+---
+title: 'DATA 607: Project 2, Tidy Data'
+author: "Tom Detzel, March 9, 2017"
+output:
+  html_document:
+    theme: lumen
+    toc: yes
+    code_folding: hide
+---
+
+***
+
+### Intro
+This project involves further exercises in cleaning up messy data using files submitted by colleagues. The goal is to transform each of three wide or disorganized dataframes into a tidy table in which each row is a single observation and each column a single variable. 
+
+The datasets I've chosen are:
+
+- From **Cesar Espitia**: A table of shipping international shipping fees and prices reported by country for December 2016 to February 2017.
+- From **Jaideep Mehta**: A table of reporting opiate deaths in the state of Connecticut.
+- From **Kyle Glide**: A table of World Bank data reporting GDP for Eurozone countries.
+
+After cleaning the data, we created some tables, graphs and an interactive map to display some of the results. To view the underlying R code, select the toggle buttons on the right. 
+  
+#### Environment Setup
+Almost everything we need is in Hadley Wickham's tidyverse package of packages. But for the plots and interactive maps we need to add packages that transform R and markdown into javascript. 
+
+```{r warning=F, message=F}
+
+# load libraries
+library(dplyr)
+library(tidyr)
+library(DT)
+library(stringr)
+library(ggplot2)
+library(ggthemes)
+library(scales)
+library(pander)
+library(readr)
+library(htmlwidgets)
+library(htmltools)
+library(highcharter)
+library(RColorBrewer)
+library(leaflet)
+library(rgdal)
+library(dygraphs)
+library(quantmod)
+
+```
+
+***
+### 1. Shipping Fees Data  
+This table comes to us from Cesar Espitia, who called it "a sample analysis that is typically requested when determining operation improvements." The data track shipping fees paid to or charged by several southeast Asia countries.
+
+#### 1.1 Import and Examine Data
+As shown in the raw data below, the date variable is not populated for every shipping fee. (See the empty cells in rows 2, 4, 6.) Fixhing this requires writing a bespoke function and transforming the date variable to a character from a factor, the default in read.csv(). 
+
+```{r warning=F, message=F}
+
+# import the data
+fees <- read.csv("Data/Discussion5.csv", header=T)
+
+# look at it, though we won't show this step
+# str(fees)
+# summary(fees)
+
+head(fees[1:6, 1:5])
+
+# fix date
+fees$Date <- as.character(fees$Date)
+
+# function to copy dates into appropriate rows
+# if a cell is empty, copies the date from the 
+# cell above
+
+fixdate <- function(fees){
+  for (i in 1:nrow(fees)){
+    if(fees[i,1]==""){
+     fees[i,1] <- fees[(i-1),1]
+    } else {
+      next
+    }
+  }
+  return(fees)
+}
+
+# populate the missing dates using the function
+fees <- fixdate(fees)
+
+# reformat the date
+fees$Date <- as.Date(fees$Date, "%m/%d/%Y")
+
+## pander(head(fees[1:5, c(1:5),]), caption = "Table 1: Fees data, initial clean-up (5 of 10 columns shown)")
+
+datatable(fees, caption = "Table 1: Missing dates populated to empty cells")
+
+```
+
+#### 1.2 Gather and Spread
+Country is a variable, but the values are spread across seven columns. We use **gather()** to put them into one. Price and Fees are in the same column, but they should be variables in their own columns. We use **spread()** to fix that. First, we make our dataframe a **tbl_df()** so it's recognized in the tidyverse.
+
+```{r warning=F, message=F}
+
+# make it a table dataframe 
+fees <- tbl_df(fees)
+
+# gather countries into a single variable 'Country'
+fees2 <- ungroup(fees) %>%
+    gather(Country, Amount, 3:10)
+
+# spread Price and Shipping Fee into their own columns
+
+fees3 <- ungroup(fees2) %>%
+    spread(Values, Amount)
+
+# Simplify the column names
+
+colnames(fees3)[c(3:4)] <- c("Fees", "Price")
+
+# the resulting table has one row for each date and country showing 
+# Shipping Fees Collected and Price of Carrier
+# Here are some statistics by Country
+
+stats <- ungroup(fees3) %>% 
+            group_by(Country) %>% 
+            summarise('Total Fees' = round(sum(Fees, na.rm=T), 2),
+                      'Average Price' = round(mean(Price, na.rm=T), 2)) %>%
+            arrange(Country)
+
+datatable(stats, caption = "Table 2: SAggregate shipping fee stats")
+
+```
+
+#### 1.3 Sample plot
+  
+```{r message=F, warning=F, fig.cap = "Figure 1: Average Price by Country"}
+
+ggplot(stats, aes(x=Country, y=stats[,3])) +
+        geom_bar(stat="identity", position=position_dodge(),
+                 fill='lightblue') +
+        xlab(" ") + scale_y_continuous(labels=scales::dollar) +
+        ylab("Average Price") +
+        theme_tufte()
+
+```
+
+```{r echo=F, eval=F, warning=F, message=F}
+
+stats <- data.frame(stats)
+
+highchart() %>%
+   hc_add_series_df(data = stats,
+                   type = "column",
+                   x = stats[,1],
+                   y = stats[,3]) %>% 
+   hc_xAxis(title = list(text="Country")) %>%
+   hc_yAxis(title = list(text="Avg. Price"))
+
+```
+
+***  
+
+### 2. Drug Deaths Data 
+
+#### 2.1 Import, Inspect, Clean Up
+These data come from **Jaideep**, who says: "The dataset is untidy as there are a lot of missing values for a number of columns."
+  
+Yep. And other things, as raw data below shows.
+  
+There are 32 columns in the table. Of those, 13 identify whether specific drugs were involved in a death and can be gathered into a single variable. One other column combines lat-lon values and should be spread into separate columns for mapping. 
+  
+There's also dirty data: Entries aren't standard in the columns that identify whether a drug was present. We have to use regular expresions and stringr to do clean-ups. 
+
+```{r message=F, warning=F}
+
+# read in the data
+deaths <- read.csv('Data/Drug_Deaths.csv', header=T, colClasses="character")
+
+# inspect; drug columns aren't standardized
+# str(deaths)
+
+print(deaths[c(557, 84, 1042, 2109, 1508, 918), c(2:3, 18,32)], row.names = FALSE)
+
+```
+
+As a first step, we fix the variable types and use regular expressions to standardize the "Y" values indicating whether a specific drug was present at death.  
+```{r message=F, warning=F}
+# transform strings to factors
+deaths[, c(1,3:12,14,30,31)] <- lapply(deaths[, c(1,3:12,14,30,31)], as.factor)
+
+# summary(deaths[, c(16:27)])
+
+# trim spaces on drug-present columns
+deaths[, c(16:27)] <- lapply(deaths[, c(16:27)], str_trim)
+
+# standardize 'Y' values using regexpr and stringr
+deaths[, c(16:27,29)] <- lapply(deaths[, c(16:27,29)], str_replace, pattern = "[yY].*", replacement = "Y")
+
+# make them factors
+deaths[, c(16:27,29)] <- lapply(deaths[, c(16:27,29)], as.factor)
+
+# glimpse the result
+pander(deaths[c(557, 84, 1042, 2109, 1508, 918), c(2:4, 16:19)], caption = "Table 3: Cleaned-up Deaths Data")
+
+```
+
+#### 2.2 Gather Drug Variable  
+First we gather the drug variable ... See last two columns (new).
+
+```{r warning=F, message=F}
+
+deaths <- tbl_df(deaths)
+
+deaths2 <- ungroup(deaths) %>% 
+              gather(Drug, Present, c(16:27,29))
+
+pander(head(deaths2[, c(1:6,20,21)]), caption = "Table 4: Gathered Deaths Data")
+
+```
+
+#### 2.3 Separate Lat-Lon  
+... then separate latitude and longitude.
+
+```{r}
+
+# make a first split to shear off city and state
+deaths3 <- separate(deaths2, DeathLoc, into = c("Place", "LatLon"), sep="[(]")
+
+# separate a second time on comma
+deaths3 <- separate(deaths3, LatLon, into = c("Lat", "Lon"), sep="[,]")
+
+# get rid of trailing parens
+deaths3$Lon <- lapply(deaths3$Lon, gsub, pattern="\\)", replacement="")
+
+deaths3$Lon <- round(as.numeric(unlist(deaths3$Lon)),7)
+deaths3$Lat <- round(as.numeric(deaths3$Lat),7)
+# str(deaths3)
+
+pander(head(deaths3[, c(2:4, 20:23)]), caption = "Table 5: New Lon-Lat columns")
+
+```
+
+#### 2.4 Some summary statistics on drug deaths 
+Among the questions **Jaideep** asked about the data: "Which drug is most common cause of fatality? Is it available by Rx?"  
+
+Now that our data is reshaped, we can answer that using **dplyr** and the **group_by()** and **summarise()** functions. Heroin is present in 54 percent of the drug fatalities. The two top drugs are illegal; fentanyl and benzodiazepine and some of the other common drugs are available by prescription.
+  
+```{r warning=F, message=F}
+
+topdrugs <- ungroup(deaths3) %>% 
+                filter(Present=='Y') %>% 
+                group_by(Drug) %>% 
+                summarise(Count=n(),
+                          'Percent Present'=round(Count/3045, 3)*100) %>% 
+                arrange(desc(Count))
+
+pander(topdrugs[1:8,], caption = "Table 6: Most common drugs in CT  fatalities")
+
+```
+
+
+```{r warning=F, message=F}
+
+heroin <- ungroup(deaths3) %>% 
+            filter(Drug=='Heroin' & Present=='Y' & CaseNumber !="") %>%  
+            group_by(CaseNumber) %>% 
+            select(CaseNumber, ImmediateCauseA, Sex, Location, Lat, Lon)
+
+
+gender <- ungroup(deaths) %>% 
+            group_by(Sex) %>% 
+            summarise(Count=n(),
+                      Percent=round(Count/3045, 3)*100) %>%
+            arrange(desc(Percent))
+
+```
+
+#### 2.5 Map of drug deaths
+We can also map the fatalities now that we have clean coordinates. Most -- `r max(gender$Percent)` percent -- are male (red dots).  
+
+```{r warning=F, message=F}
+
+pal <- colorFactor(c("blue", "red"), domain = c("Male", "Female"))
+
+leaflet(heroin) %>%
+  setView(lng = -71.881207,
+          lat = 41.712872,
+          zoom = 8) %>%
+  addProviderTiles("CartoDB.Positron") %>% 
+  addCircleMarkers(heroin$Lon, heroin$Lat,
+          radius = ~ifelse(Sex == "Female", 6, 8),
+          color = ~pal(Sex),
+          stroke = FALSE, fillOpacity = 0.35,
+          label = ~htmlEscape(ImmediateCauseA))
+
+```
+
+***
+
+### 3. World Bank Data, European Union
+According to **Kyle**, "It would be a good exercise to tidy this table by putting all of the years in a one column and the metrics in their own columns. Then you could use R to visualize some of the development trends by country and year in a line graph."
+
+OK. We're game. Here is growth in real GDP for the European Union states over time.
+
+```{r eval=T, warning=F, message=F, fig.cap=""}
+
+# get the data
+euro <- read.csv('Data/EUData.csv', header=T, colClasses="character")
+
+# fix the column names
+colnames(euro)[5:61] <- 1960:2016
+
+# gather the years
+euro2 <- ungroup(euro) %>% 
+          gather(Year, Value, 5:61)
+
+# set the data type
+euro2$Value <- as.numeric(euro2$Value)
+
+# select gdp data for the chart 
+gdp <- ungroup(euro2) %>% 
+          filter(is.null(Value)==FALSE) %>% 
+          filter(Indicator.Name=="GDP (current US$)") %>% 
+          select(Year, Value)
+
+# plot it
+ggplot(gdp, aes(x=Year, y=Value/100000)) +
+        geom_bar(stat="identity", position=position_dodge(),
+                 fill='blue') +
+        xlab(" ") + scale_y_continuous(labels=scales::dollar) +
+        ylab("GDP (current US$, 100K)") +
+        scale_x_discrete(breaks=seq(1960,2020,10)) +
+        theme_tufte()
+
+```
+
