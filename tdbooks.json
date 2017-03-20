@@ -1,0 +1,79 @@
+{
+
+    "book": [
+
+        {
+
+            "title": "Visual Explanations",
+
+            "subtitle": "Images and Quantities, Evidence and Narrative"
+
+            "author": "Edward R. Tufte",
+
+            "copyright": 1997,
+
+            "website":"www.edwardtufte.com",
+
+            "publisher": "Graphics Press",
+
+            "address": "Cheshire, Conn., 06410",
+
+        },
+
+        {
+
+            "title": "Beautiful Evidence",
+
+            "subtitle":
+
+            "author": "Edward R. Tufte",
+
+            "copyright": 2006,
+
+            "website":"www.edwardtufte.com",
+
+            "publisher": "Graphics Press",
+
+            "address": "Cheshire, Conn., 06410",
+
+        },
+
+        {
+
+            "title": "Envisioning Information",
+
+            "subtitle":
+
+            "author": "Edward R. Tufte",
+
+            "copyright": 1990,
+
+            "website":"www.tufte.com",
+
+            "publisher": "Graphics Press",
+
+            "address": "Cheshire, Conn., 06410",
+
+        },
+
+        {
+
+            "title": "R In Action",
+
+            "subtitle": "Data Analysis and Graphics in R"
+
+            "author": "Robert I. Kabacoff",
+
+            "copyright": 2015,
+
+            "website":"www.manning.com",
+
+            "publisher": "Manning Publications",
+
+            "address": "Shelter Island, NY, 11964",
+
+        }
+
+    ]
+
+}
