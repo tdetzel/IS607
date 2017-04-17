@@ -1,0 +1,385 @@
+---
+title: "Week 10 Assignment -- Text Classification"
+author: "Tom Detzel"
+date: "April 16, 2017"
+output:
+  prettydoc::html_pretty:
+    theme: lumen
+    highlight: github
+    toc: yes
+subtitle: CUNY MSDA DATA IS607
+---
+
+```{r setup, echo=F, eval=T, message=F, warning=F}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(needs)
+needs(tidyverse, ggthemes, tidytext, tm, caret, MASS, e1071, R.utils, RTextTools, pander, knitr)
+
+```
+
+***
+<br>
+
+## 1. Introduction
+For this assignment, we're asked to work with R textual analysis tools to download a text corpus and classify documents. I chose an SMS message dataset from the UC Irvine Machine Learning Laboratory. I used the **tidytext** and **tm** packages to explore the data and prepare it for modeling, then fit a Support Vector Machine to predict whether messages were spam or ham. The model did well at predicting ham, but not spam. Overall prediction accuracy was 86 percent. Sensitivity -- or the probability of correctly predicting ham -- was 98 percent. Specificity -- the probability of correctly predicting spam -- was only 2 percent. Detailed results are summarized in the confusion matrix below. I did not have enought time to tune the model.    
+  
+***
+<br>
+
+## 2. Get the SMS Message data from UCI
+
+```{r eval=T, message=F, warnings=F}
+
+# disable quoting to avoid error
+
+url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/00228/smsspamcollection.zip"
+
+if (!file.exists("smsspamcollection.zip")) {
+download.file(url=url, destfile="smsspamcollection.zip", method="curl")}
+
+unzip("smsspamcollection.zip")
+
+corpus <- read.delim("SMSSpamCollection", sep="\t", header=F, colClasses="character", quote="")
+
+# str(corpus)
+colnames(corpus) <- c("cat", "text")
+corpus$cat <- factor(corpus$cat)
+
+pander(table(corpus$cat), caption="Spam and Ham Count in Raw Data")
+
+```
+
+***
+<br>
+
+## 3.0 Use tidytext to explore the data
+In these steps we tokenize the data -- i.e., break the constituent messages into individual lists. We remove "stop words" -- prepositions and articles that typically don't add meaning -- and then chart the most frequently used words.
+
+```{r eval=T, message=F, warnings=F}
+
+# first tokenize
+tidy_corpus <- corpus %>%
+  unnest_tokens(word, text)
+
+# remove stop words
+data("stop_words")
+
+tidy_corpus <- tidy_corpus %>%
+                  anti_join(stop_words)
+
+tidy_corpus %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 100) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) +
+    geom_col() +
+    xlab(NULL) +
+    coord_flip() +
+  theme_tufte()
+
+```
+
+***
+<br>
+
+## 3. Sentiment analysis, ham vs. spam  
+
+**tidytext** has tools for sentiment analysis. Following examples in our text, I was able to find the words that contributed most to messages with positive or negative sentiment.
+
+```{r eval=T, message=F, warnings=F}
+
+tidy_spam <- tidy_corpus %>% 
+  filter(cat == 'spam') %>% 
+  count(word, sort = TRUE)
+
+tidy_spam <- 
+  tidy_spam %>%
+  mutate(prop = n/sum(n))
+
+tidy_ham <- tidy_corpus %>% 
+  filter(cat == 'ham') %>% 
+  count(word, sort = TRUE)
+
+tidy_ham <- 
+  tidy_ham %>%
+  mutate(prop = n/sum(n))
+
+# try sentiment analysis
+
+nrcmad <- get_sentiments("nrc") %>% 
+  filter(sentiment == "anger")
+
+tidy_corpus %>%
+  inner_join(nrcmad) %>%
+  count(word, sort = TRUE)
+
+# spam is much more positive
+corpus_sentiment <- tidy_corpus %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(cat, sentiment) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+# sentiment of words in sms messages
+sms_word_counts <- tidy_corpus %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+sms_word_counts
+
+# plot it
+sms_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip()
+
+# spam sentiments
+
+spam_word_counts <- tidy_corpus %>%
+  filter(cat == 'spam') %>% 
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+ham_word_counts <- tidy_corpus %>%
+  filter(cat == 'ham') %>% 
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+spam_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip() +
+  theme_tufte()
+
+ham_word_counts %>%
+  group_by(sentiment) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(y = "Contribution to sentiment",
+       x = NULL) +
+  coord_flip() +
+  theme_tufte()
+
+```
+
+***
+<br>
+## 4. Word Cloud -- I hate 'em  
+
+Sure, they're ugly and a total cliche. But I still hate 'em.
+
+```{r}
+
+library(wordcloud)
+
+plot.new()
+par(mfrow=c(1,2))
+
+tidy_ham %>%
+  with(wordcloud(word, n, max.words = 50))
+
+tidy_spam %>%
+  with(wordcloud(word, n, max.words = 50))
+
+```
+
+***
+<br>
+
+## 5. Create and Inspect a Document Term Matrix  
+
+**tm** has functions that help prepare text data for modeling. One essential data structure is the Document Term Matrix. In a DTM, every document is a row and every column is a word. Like **tidytext**, **tm** has a number of built-in functions to find frequent words, inspect the matrix, etc. For instance, inspect() reports the number of rows in our corpus (5,574), the number of words (1,592) and the length of the longest document (19 words). You can combine other R functions, say to determine that there are 854 words that appear 10 or more times in the corpus. For our model, we exclude terms (words) with fewer than 5 appearances in the messages.  
+  
+Output of the *tm* inspect() function summarizes the number of rows and terms in the matrix and displays the first 10 rows and columns.
+
+```{r, warning=F, messages=F, eval=T}
+
+## cleanup steps ##
+
+# first put the corpus in tm format
+corpus2 <- Corpus(VectorSource(corpus$text))
+# standardize to lowercase
+corpus2 <- tm_map(corpus2, content_transformer(tolower))
+# remove tm stopwords
+corpus2 <- tm_map(corpus2, removeWords, stopwords())
+# standardize whitespaces
+corpus2 <- tm_map(corpus2, stripWhitespace)
+# remove punctuation
+corpus2 <- tm_map(corpus2, removePunctuation)
+
+# corpus2[[1]]$content
+
+# make a dtm with the cleaned-up corpus
+
+dtm <- DocumentTermMatrix(corpus2)
+# inspect(dtm)
+
+# words appearing more than 5x
+features <- findFreqTerms(dtm, 10)
+# summary(features)
+# head(features)
+
+# limit to frequent terms, i.e., 5 or more appearances using the dictionary parameter
+dtm2 <- DocumentTermMatrix(corpus2, list(global = c(2, Inf),
+                                         dictionary = features))
+inspect(dtm2)
+
+# freq <- colSums(as.matrix(dtm2))
+# length(freq)
+
+# ord <- order(freq)
+# freq[head(ord)]
+# freq[tail(ord)]
+
+#head(table(freq), 10)
+# tail(table(freq), 10)
+
+```
+
+***  
+<br>
+
+## 6. Split into test, training sets  
+  
+We've standardized the corpus by taking out stopwords, punctuation and white space and converting to lowercase. In text messages, sometimes caps and punctuation do have specific meaning; we'll assume for the moment that they don't and run a model that sets a baseline for classifcation rate. Next we split the data into test and training sets before building a classifier. The function createDataPartition() from the **caret** package does this for us. The table shows that the proportions of ham and spam messages in the test and training sets are approximately the same.
+
+```{r}
+
+# set.seed(8080)
+
+train_idx <- createDataPartition(corpus$cat, p=0.75, list=FALSE)
+
+# set for the original raw data 
+train1 <- corpus[train_idx,]
+test1 <- corpus[-train_idx,]
+
+# set for the cleaned-up data
+train2 <- corpus2[train_idx]
+test2 <- corpus2[-train_idx]
+
+# check to see if the proportions of ham/spam are the same 
+frqtab <- function(x, caption) {
+    round(100*prop.table(table(x)), 1)
+}
+
+ft_orig <- frqtab(corpus$cat)
+ft_train <- frqtab(train1$cat)
+ft_test <- frqtab(test1$cat)
+ft_df <- as.data.frame(cbind(ft_orig, ft_train, ft_test))
+colnames(ft_df) <- c("Original", "Training set", "Test set")
+
+pander(head(ft_df), caption="Ham/Spam in Test and Training Sets")
+
+
+```
+
+## 7. Convert Document Term Matrix
+
+To work with classifiers, the Document Term Matrix has to be converted from a matrix of counts to a boolean value indicating whether a word is present or not. Here we make new matrices using the test and training data and convert them for modeling.
+
+
+```{r warning=F, messages=F, eval=T}
+
+dict2 <- findFreqTerms(dtm2, lowfreq=10)
+
+sms_train <- DocumentTermMatrix(train2, list(dictionary=dict2))
+sms_test <- DocumentTermMatrix(test2, list(dictionary=dict2))
+
+# this step further converts the DTM-shaped data into a categorical form for modeling with Naive Bayes
+convert_counts <- function(x) {
+    x <- ifelse(x > 0, 1, 0)
+    # x <- factor(x, levels = c(0, 1), labels = c("Absent", "Present"))
+}
+
+sms_train <- sms_train %>% apply(MARGIN=2, FUN=convert_counts)
+sms_test <- sms_test %>% apply(MARGIN=2, FUN=convert_counts)
+
+sms_train <- as.data.frame(sms_train)
+sms_test <- as.data.frame(sms_test)
+
+str(sms_train)
+
+```
+
+***
+<br>
+
+## 8. Train a Support Vector Machine
+I tried a naive Bayes model and a logistic regression but could only get an SVM to work. 
+
+```{r warning=F, messages=F, eval=T}
+
+# prep the data
+sms_train1 <- cbind(cat=factor(train1$cat), sms_train)
+sms_test1 <- cbind(cat=factor(test1$cat), sms_test)
+
+# sms_train1[,-1]<-apply(sms_train1[,-1],MARGIN=2,as.numeric)
+# sms_test1<-apply(sms_test, MARGIN=2, as.numeric)
+
+sms_train1<-as.data.frame(sms_train1)
+sms_test1<-as.data.frame(sms_test1)
+
+# model specification
+fit1 <- svm(cat~., data=sms_train1)
+
+# print a summary
+fit1
+
+```
+
+```{r warning=F, messages=F, eval=T}
+
+fit1.pred <- predict(fit1, na.omit(sms_test1))
+
+fit1.perf <- table(na.omit(sms_test1$cat), fit1.pred, dnn=c("Actual", "Predicted"))
+
+fit1.perf
+
+# head(fit1.pred, 20)
+
+
+```
+
+***
+<br>
+
+## 9. Prediction
+As noted earlier, the model doesn't do well at predicting spam. On the test data, the model correctly predicted only 4 out of 22 spam messages. It also classed a fair measure of ham messages as spam (182). Clearly more tuning is needed. 
+
+
+```{r warning=F, messages=F, eval=T}
+
+confMatrix1 <- confusionMatrix(fit1.pred, sms_test1$cat, positive="ham")
+confMatrix1
+
+```
+
+
+
+
+
+
+
