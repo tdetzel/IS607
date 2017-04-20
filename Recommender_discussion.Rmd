@@ -1,0 +1,90 @@
+---
+title: 'Discussion 11: Recommender Systems'
+author: "Tom Detzel"
+date: "April 19, 2017"
+output:
+  html_document:
+    theme: lumen
+    toc: yes
+    code_folding: hide
+
+---
+
+<br>
+***
+
+## Introduction  
+  
+When the weather is nice and I have some free time on the weekends, I like to have a beer and enjoy a nice cigar.  
+
+If you buy cigars retail, you will pay through the nose. So I go online to get them. There are several options, but [Thompson Cigar](https://www.thompsoncigar.com/) in Florida is probably the most venerable online purveyor of stogies. Log in and the immediately hit you with multiple bargains, but a whole series of "Recommended for you" cigars.
+
+Here's a snapshot of the home view:  
+  
+![](C:/Users/Tom's Dell/Pictures/cigars.png)  
+
+<br>
+
+Pretty gross, I know.
+
+Anyway, I highly suspect that the "Recommended for you" choices are actually "Recommended for you and anyone else who wants a cheap cigar." Mostly they're bargain brands that aren't highly rated. 
+
+On to the assignment.
+  
+<br>
+***
+
+## Scenario Analysis  
+
+**1) Who are the target users?**   
+
+This is obvious. Cigar smokers. Mostly old, fat white guys who want cigars and have repulsive political views (not me). There is no doubt when you log in that his is all about cigars -- you can get hundreds of brands cheap.
+
+**2) What are the key goals?**  
+
+Also obvious. Sell TONS of cigars. If a user can't find a cigar in your price range and fitting your tastes, then he/she is an idiot. There are dozens of ways to search by price, brand, and numerous build qualities, components, sizes, other attributes. And special deals, coupons, marketing inducements galore.
+
+**3) How can you help them accomplish their goals?**
+
+Free shipping, free accessories, extra free cigars, user taste reviews and ratings, expert ratings, you name it.
+
+And those recommendations.
+
+<br>
+***
+
+## Reverse Engineering
+
+Let's look at some of the attributes of the site:
+
+-- Recommendations "for you" on the opening view.
+
+-- "Customers who viewed this also bought" brings up similar items that might also appeal to you.
+
+-- "Recently viewed" -- in case you forgot what you were interested in the last time.
+
+-- Reviews include ratings distribution, pro-cons and a respondents recommendation.
+
+-- Buyers/Reviewers are "verified."
+
+So, Thompson Cigar knows my history, has compared my likes to those of other customers and uses that information to compute similarity measures that figure into its recommender algorithm.
+
+Bonus: A "Shameless Bribe" at the bottom, so if you haven't already been suckered in, there's a chance to buy super cheap cigars you'll probably like.  
+  
+![](C:/Users/Tom's Dell/Pictures/cigarsII.png)
+  
+  
+<br>
+***
+
+## Ways to Improve
+
+1. Why they don't immediately offer things I've purchase previously isn't clear. That is probably the best predictor of what I might buy. 
+
+2. They could recommend by size and flavor profile: mild-medium robusto's are what I usually go for. As is, the recommendations are all over the map.
+
+3. Even more freebies, with free shipping offers on cigars that are similar, using an algorithm like Amazon's that recommends similar items rather than cigars preferred by similar buyers.
+
+Still, think I'll order some anyway.
+
+
