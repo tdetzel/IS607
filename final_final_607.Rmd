@@ -1,0 +1,943 @@
+---
+title: "Final Project"
+author: "Tom Detzel and Joel Park"
+date: "May 14, 2017"
+output:
+  prettydoc::html_pretty:
+    theme: lumen
+    highlight: github
+    toc: yes
+subtitle: CUNY MSDA DATA IS607
+---
+
+```{r setup, eval=T, include=FALSE}
+# setup, loads packages for this analysis
+
+# knitr::opts_chunk$set(echo = TRUE)
+
+ipak <- function(pkg){
+    new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+    if (length(new.pkg))
+        install.packages(new.pkg, dependencies = TRUE)
+    sapply(pkg, require, character.only = TRUE)
+}
+
+# make a package list
+packages <- c('RPostgreSQL', 'data.table', 'stringr', 'readr', 'recommenderlab', 'ggthemes', 'knitr', 'kableExtra', "rmarkdown", 'tidytext', 'tm', 'tokenizers', 'caTools', 'caret', 'tau', 'e1071', 'tidyverse')
+
+# load 'em
+ipak(packages)
+
+```
+***
+<br>
+
+## 1. Introduction
+
+### 1.1 Recommender systems
+
+The goal of a recommender system is to help users -- usually consumers -- find what they want and discover new information that will help them. Recommender systems are ubiquitous now in online marketing -- for books, music, health care services, the arts. Recommender systems may follow different paradigms. Content-based systems recommend based on similarity between items or users; similarity can be quantified using a variety of measures: cosine similarity, k-nearest neighbors, Pearson correlation, logistic regression models and more.
+
+In User-Based Collaborative Filtering (UBCF), items are recommended assuming that users with similar preferences will rate items similarly. In Item-Based Collaborative Filtering (IBCF), the presumption is that users will prefer items that are similar to other items they like. Information about users and items is stored in a matrix that is modeled and used to make predictions -- the recommendations.
+
+In this project, we use the **recommenderlab** package in R to design User-Based and Item-Based recommender systems based on a database of Amazon Fine Food reviews. Our models incorporate ratings from 71,188 Amazon users on 31,589 products.
+
+**Results:** We built five different recommender models using three different similarity measures and evaluated them with ROC curves and confusion matrices. The best-performing model was User-Based Collaborative Filtering using Pearson correlation a recall of ~22 percent and precision of ~10 percent at k=40 (i.e., when 40 recommendations are used to compute similarity). At k > 40, the IBCF models peformed better. For reasons of computing efficiency, we select UBCF-Pearson as our preferred system.
+
+In **Appendix I**, we also include code for our attempt at a recommender system using semantic analysis. Similarity is computed on a document-term matrix using a Support Vector Machine. Results appear to be more accurate than our UBCF model, although we ran out of time to thoroughly evaluate the semantic approach.
+
+### 1.2 Amazon Fine Foods and the Recommender System
+
+Amazon is an American electronic commerce and cloud computing company founded on July 5, 1994, by Jeff Bezos and is based in Seattle. It is the largest internet-based retailer in the world by total sales and market capitalization. Part of Amazon's success is due to the company's recommender systems and their incredible success in marketing products based on user preferences and product similarity. This as a result had led to increases in sales and an overall asset to the company. Amazon's own recomender system, known as item-to-item collaborative filtering, is a hybrid approach designed to produce strong results using fast, efficient computing in a high-volume, information dense environment. By comparison, the recommender systems were offer here are basic.
+
+Amazon's recommender algorithms [can be found here](https://www.cs.umd.edu/~samir/498/Amazon-Recommendations.pdf).
+
+In this exercise, we will be creating a recommender system that will help guide its users for their next meals (or their pet's, as is the case). Just like many other products on Amazon, a user would have purchased the food item and rated it from a 1 to 5 scale, with 1 being terrible and 5 being terrific. These ratings are the numeric basis for computing similarity in our models.
+
+***
+<br>
+
+## 2. Database Connect
+
+We've stored our data in a PostgresSQL volume in an Amazon RDS. Code in this section logs in and downloads 568,454 records. We're including the code for information purposes, but because this is a large dataset we are commenting it out and only loading the cleaned subsets that are used for modeling. The clean-up code, which uses **regular expressions** and **dplyr** is also included but commented out for computing efficiency.
+
+```{r eval=T, warning=F, message=F}
+
+# amzpw <- "lezted17"
+# amzhost <- 'tdpostgres.cfbzmuyqdlau.us-east-1.rds.amazonaws.com'
+# amzuser <- 'tomdetz'
+
+# loads the RPostgreSQL driver
+# drv <- dbDriver("PostgreSQL")
+
+# https://434017622503.signin.aws.amazon.com/console
+
+# connect to the postgres db, normal setup
+# con <- dbConnect(drv, dbname = "kaggle",
+#                 host = amzhost, port = 5432,
+#                 user = amzuser, password = amzpw)
+
+# check for the table
+# dbExistsTable(con, "reviews")
+
+# pull 100K rows for testing
+# data <- dbGetQuery(con, "SELECT * FROM reviews ORDER BY hashfloat8(random())   LIMIT 100000 ;")
+
+# data <- dbGetQuery(con, "SELECT * FROM reviews;")
+
+load("amDat.rda")
+data <- data[sample(nrow(data), 100000), ]
+
+kable(data[c(1:6), c(2,3,7,9)], caption="Reviews Raw Import")
+
+```
+***
+<br>
+
+## 3. Data Preparation
+
+In the following steps, we load the raw data, clean up some dirty fields with regex, create a mean review score for each user and build a user-item matrix that will be fed to **Recommenderlab** to build our recommendation models.
+
+The data includes variables for User and Product identification codes, a score (1-5) that is each user's product recommendation, a summary review and an extended review that goes into details. (In **Appendix I**, we use these summary reviews for a semantic analysis.)
+
+```{r, eval=T, message=F, warning=F}
+# get product counts
+count <- ungroup(data) %>%
+          group_by(ProductId) %>%
+          summarize(Count=n()) %>%
+          arrange(desc(Count))
+
+# get mean score for each product
+mean_score <- ungroup(data) %>%
+                group_by(ProductId) %>%
+                summarize(Mean_score = mean(Score)) %>%
+                arrange(desc(Mean_score))
+
+# merge counts and mean into data frame
+data <- merge(data, count, by.x='ProductId', by.y='ProductId', all.x=T)
+data <- merge(data, mean_score, by.x='ProductId', by.y='ProductId', all.x=T)
+
+# drop unneeded columns
+data2 <- data[, c(1:4,7,9:12)]
+
+# delete rid of stray characters
+data2$UserId <- gsub('#oc-', '', data2$UserId)
+
+# trim white space
+data2[, c(1:6)] <- lapply(data2[, c(1:6)], trimws)
+
+# make Score numeric
+data2$Score <- as.numeric(data2$Score)
+
+# create a new data set with a column that groups by product and combines the Summary reviews; this df is used for semantic analysis later
+
+data3 <- ungroup(data2) %>%
+            group_by(ProductId) %>%
+            mutate(combine_summary = paste0(Summary, collapse = ' '))
+
+# check lengths
+# length(unique(data3$combine_summary))
+# length(unique(data3$ProductId))
+
+# end data cleanup on original data; clean data in data3
+
+## for recommenderlab, the data must be imported in a particular format
+## the following steps create 'datRlab' in the right format
+
+# drop products with fewer than median count
+medianProds <- median(data2$Count)
+
+datRlab <- ungroup(data3) %>%
+            filter(Count >= medianProds)
+
+# remove unneded columns
+datRlab <- datRlab[, c(3,1,5)]
+
+# remove duplicates
+datRlab <- datRlab[!duplicated(datRlab[,c(1,2)]),]
+
+```
+
+```{r eval=T, message=F, warning=F}
+## datRlab is now in the format needed for recommenderlab
+
+kable(head(datRlab), caption='Data in Recommenderlab Format')
+
+```
+***
+<br>
+
+## 4. Data Exploration  
+
+### 4.1 How many unique users and products?
+
+Unique users: `r format(length(unique(data3$UserId)),big.mark=",", scientific=FALSE)`.
+Unique products: `r format(length(unique(data3$ProductId)), big.mark=",",scientific=FALSE)`
+
+### 4.2 What are most-reviewed products?   
+
+The most-reviewed item is Quaker Soft-Baked Cookies, with 913 reviews. Second most-reviewed product is Nature's Way coconut oil moisturizer.
+
+### 4.3 Who are the top reviewers?
+
+The top reviewer, with 181 reviews, is 'C. F. Hill'. Second-top reviewer, with 106 reviews, is 'B. Davis, The Happy Hermit'.
+
+### 4.4 What is the distribution of reviewer scores?
+Most users only rate a single item -- the distribution is strongly skewed to the left. By comparison, rating scores are skewed to the right -- the average review score is `r format(round(mean(data3$Score), 2), big.mark=",",scientific=FALSE)`. Reviewers tend to give positive reviews overall. (The plots show each user's mean scores for products rated 50 or more times.)
+
+```{r, eval=T, message=F, warning=F}
+
+# top products sort
+# ungroup(data4) %>%
+#   group_by(ProductId) %>%
+#   summarize(Count=n()) %>%
+#   arrange(desc(Count))
+
+# top reviewers
+# ungroup(data4) %>%
+#   group_by(UserId) %>%
+#   summarize(Count=n()) %>%
+#   arrange(desc(Count))
+
+# limit to products with more than median number of reviews
+data4 <- data3[which(data3$Count >= medianProds),]
+
+# remove any duplicate reviews
+data4 <- data4[!duplicated(data4[,c(1,3)]),]
+
+# add a reviewer count
+reviewer_count <- ungroup(data4) %>%
+                    group_by(UserId) %>%
+                    summarize(RCount = n())
+
+# merge into df
+data4 <- merge(data4, reviewer_count, by.x='UserId', by.y='UserId', all.x=T)
+
+avgScore <-round(mean(data4$Score), 2)
+
+# distributon of product mean scores
+ggplot(data4[which(data4$RCount <= 50),], aes(x=Mean_score)) +
+  geom_histogram(binwidth=.01, alpha=.5, position="identity") +
+  geom_vline(aes(xintercept=mean(Score)), color="blue") +
+  annotate("text", x=4.6, y=1500, label=paste("Mean = ", avgScore)) +
+  labs(x="Mean Score", y="Count",
+          title="Distribution of User Mean Ratings") +
+  theme_tufte()
+
+# number of reviews
+ggplot(data4[which(data4$RCount <= 50),], aes(x=RCount)) +
+    geom_histogram(binwidth=1, alpha=.5, position="identity") +
+    labs(x="Count of Reviews", y="Count of Users",
+         title="Distribution, Number of Reviews per User") +
+    theme_tufte()
+
+```
+
+### 4.5 Differences among reviewers
+
+Do users who review more products tend to give different scores? The chart below shows that reviewers are fairly consistent despite reviewer experience. Scores tend to be about the same, although they are skewed to be positive overall with averages above 4 in all groups.
+
+```{r}
+# suggestion for further exploration: difference in average scores for bins of reviewers 0-5 reviews 5-10 reviews, etc.
+
+data4$Rcut<-cut(data4$RCount, c(0,5,10,15,20,25,30,35,40,45,50,100,200))
+
+# descriptive stats based on reviwer activity
+
+statbox <- ungroup(data4) %>%
+              group_by(Rcut) %>%
+              summarize(avgScore = round(mean(Score, na.rm=T), 2),
+                        medScore = median(Score),
+                        sdScore = round(sd(Score, na.rm=T), 2))
+
+colnames(statbox) <- c("Review Count", "Average Score",
+                       "Median Score", "Std Deviation")
+kable(statbox)
+
+```
+***
+<br>
+
+## 5. Recommenderlab modeling  
+
+*The Recommenderlab has been modelled from the examples provided from the "Building a Recommendation System with R" by Gorakala, S. See References section.*
+
+The Amazon Fine Foods.csv has been downloaded and transformed into the dataframe **datRlab**. The **Recommenderlab** package allows us to use and evaluate recommender systems. The data must be first converted into a matrix format. Below, the **datRlab** matrix prepared earlier is converted into a **Recommenderlab** format called a **realRatingMatrix**. This is a list that holds the data in six slots containing each rating's location (standard matrix notation as i,p), product and user IDs (character vectors) and each rating value (numeric).
+
+(**Note**: For reasons of markdown rendering efficiency, we show the code to create the matrix but load the actual matrix from a pre-compiled R object.)
+
+```{r eval=T, message=F, warning=F}
+
+# r <- as(datRlab, "realRatingMatrix")
+# r
+#
+load("rating_matrix.rda")
+
+```
+
+### 5.1 Matrix inspection
+
+**Recommenderlab** provides functions to inspect the data. As with most sales websites with reviews, there will be many users, but the majority of users will not have reviewed most of the items (foods in this case) listed on the website. As a result, the matrix will be sparse (in other words, lots of empty fields!).
+
+
+```{r}
+# This function shows what the sparse matrix looks like.
+getRatingMatrix(r[c(1:5),c(1:4)])
+
+```
+
+```{r eval=F, include=F}
+# r@data@Dimnames[[1]][1:6]
+# r@data@Dimnames[[2]][1:6]
+# r@data@x[1:6])
+
+# head(as(r, "list"), 3)
+# kable(head(data.frame), caption="Data Slice, Rating Matrix")
+
+```
+
+### 5.2 Reviewer bias
+
+Sparse data is not the only issue. Most review sites suffer from reviewer bias. There will be some users who tend to rate nearly all 4s and 5s, while others  rate 1s and 2s. To deal with these biases, we will **normalize** the data. In other words, this normalization will transform scores around a mean of 0.
+
+A heatmap helps visualize overall ratings between the users and his/her items. The heatmap below suffers visually from sparse data but still shows which users are high raters and products that are rated frequently.
+
+```{r eval=T, message=F, warning=F}
+
+# Visualize only the users who have tried many differents foods and the foods that have been tried/eaten/rated by many users. To identify and select the most relevant users and foods, follow these steps:
+
+# 1. Determine the minimum number of foods per user.
+# 2. Determine the minimum number of users per food.
+# 3. Select the users and foods matching these criteria.
+
+min_n_foods <- quantile(rowCounts(r), 0.999)
+min_n_users <- quantile(colCounts(r), 0.99)
+
+# Now, we can visualize the rows and columns matching the criteria
+image(r[rowCounts(r) > min_n_foods, colCounts(r) > min_n_users, main = "Heatmap of the top users and foods"])
+
+```
+
+
+### 5.3 Recommending by item popularity -- Example
+
+It's always interesting to see the occurrences of the ratings. When customers go into a restaurant or into a grocery store, they naturally gravitate to popular items. If the items have been bought and have been high ratings, it seems reasonable that the customer would repurchase this food or item. Amazon's job, however, is to increase sales by recommending similar products.
+
+**Recommenderlab** offers multiple recommender algorithms. To demonstrate, this next chunk uses the "POPULAR" method -- the number of times users have rated an item. More details on **Recommenderlab** algorithms can be found in the References section.
+
+This code models Top 5 recommendations based on the first 10,000 users and predicts Top 5 recommendations for the next 500 users based on the model. Predictions for users 10,001 to 10,1003 are shown. Recommendations for the first three users in the matrix are shown below.  
+
+```{r}
+# Create a recommender from the first 10000 users in our rating matrix.
+r.popular <- Recommender(r[1:10000], method = "POPULAR")
+
+# Get the top 5 recommendation lists for the next user not used to learn the model.
+recom <- predict(r.popular, r[10001:10500], n =5)
+
+# View the recommendations top 5 recommendations for five users not in the The result contains ordered top-N (n = 5) recommendation lists, one for each user. The recommended items can be inspected as a list.
+
+as(recom, "list")[1:3]
+
+```
+
+#### 5.3.1 Under the hood -- Ratings compared
+Recommendations for users 10001-1003 users are the same, but that is not the case for all the users. Inspection shows that there are, in fact, five unique sets of recommendations among users 10001-10500. Thirteen products are recommended in differing order.  
+
+```{r}
+
+unique(as(recom, "list"))
+
+```
+
+```{r eval=T, warning=F, message=F}
+
+users <- unique(as(recom, "list"))
+
+products <- c("Baby Gourmet Organic Simple Stage", "Honey Maid Graham Crackers", "Newman's Own Dog Treats", "Fudge Drizzle Caramel Popcorn", "Back To Nature Golden Honey Oat Grahams", "Love Crunch Granola", "Prima Taste Rendance Curry", "Vanilla Blueberry Oat Clusters", "Love Crunch Chocolate Granola", "Mccann's Steel Cut Oatmeal", "Newman's Own Licorice Twists", "Mccann's Steel Cut Irish Oatmeal", "YumEarth Organic Lollipops")
+
+prodIDs <- c("B0051COPH6", "B004FEN3GK", "B0045XE32E", "B004JGQ15E", "B004BKLHOS",  "B006J4MAIQ", "B0041CIP3M", "B008RWUHA6", "B006J4MAUE", "B008J1HO4C", "B003XDH6M6", "B001EO5U3I", "B000HDK0DC")
+
+Product <- unlist(users)
+RecNum <- rep(1:5, 5)
+ID <- rep(1:5, each=5)
+df <- cbind(ID, RecNum, Product)
+
+items_df <- data.frame(cbind(prodIDs, products))
+
+df <- merge(df, items_df, by.x="Product", by.y="prodIDs", all.x = TRUE)
+df <- df[, c(2,3,1,4)]
+colnames(df)[4] <- "Name"
+df$Name <- strtrim(df$Name, 12)
+
+pop_recs <- spread(df[, c(1,2,4)], RecNum, Name)
+
+kable(pop_recs)
+
+```
+
+## 6. Item-Based Collaborative Filtering
+
+Collaborative filtering is a branch of recommendation that takes account of the information about different users. Given a new user, the algorithm considers the user's purchases and recommends similar items.
+
+The core algorithm is based on these steps:
+
+1. For each two items, measure how similar based on user ratings.
+2. For each item, identify the k-most similar items.
+3. For each user, identify the items that are most similar to the user's purchases.
+
+### 6.1 Preparing the item-based model
+
+We will define the training and test set and create an IBCF recommender system based on cosine similarity between items. For ease of computation, we will limit the model to users who have rated at least 30 foods and foods that have been reviewed at least 100 times.
+
+Our algorithm will compute the cosine similarity for all the items and identify the k=30 most similar items for making recommendations. The model returns an 815 x 815 matrix of similarity scores as indicated in the heat map.
+
+```{r eval=T, message=F, warning=F}
+
+# prune the data to users > 30 and products reviewed > 100
+ratings_foods <- r[rowCounts(r) > 30, colCounts(r) > 100]
+ratings_foods1 <- ratings_foods[rowCounts(ratings_foods) > 30,]
+# ratings_foods1
+
+# create training, test indices at 80/20
+which_train <- sample(x = c(TRUE, FALSE), size = nrow(ratings_foods1), replace = TRUE, prob = c(0.8, 0.2))
+
+# create the training and the test data sets
+recc_data_train <- ratings_foods1[which_train, ]
+recc_data_test <- ratings_foods1[!which_train, ]
+
+# Build recommender IBCF - cosine:
+recc_model <- Recommender(data = recc_data_train, method = "IBCF", parameter = list(k = 30))
+
+# We have now created a IBCF Recommender Model
+
+model_details <- getModel(recc_model)
+
+print("Similarity Matrix Dimensions")
+dim(model_details$sim)
+
+```
+
+```{r}
+
+n_items_top <- 200
+image(model_details$sim[1:n_items_top, 1:n_items_top], main = "Heatmap of the first 200 rows and columns")
+
+```
+
+### 6.2 Testing the item-based model
+
+Now that we have trained the IBCF Recommender Model with the training set we will evaluate it using the test set. Our method is to return a Top 5 list for users in the test data. Recommendations are shown for the first three users.
+
+```{r}
+
+# We will define n_recommended that defines the number of items to recommend to each user and with the predict function, create prediction(recommendations) for the test set.
+
+n_recommended <- 5
+recc_predicted <- predict(object = recc_model, newdata = recc_data_test, n = n_recommended)
+
+# This is the recommendation for the first user
+recc_predicted@items[[1]]
+
+# Now let's define a list with the recommendations for each user
+recc_matrix <- lapply(recc_predicted@items, function(x){
+  colnames(ratings_foods)[x]
+})
+
+# Let's take a look the recommendations for the first four users:
+recc_matrix[1:3]
+
+```
+
+6.2.1 Exploration
+
+The recommendations for User 1 are, respectively, Zukes Chicken Minis (dog treat), Zuke's Mini Naturals (dog treat), Feline Pine Cat Litter, Zukes Mini Naturals and Bourbon Vanilla Beans.
+
+Clearly a pet person. The similarities between products is obvious, with the exception of the vanilla beans.
+
+For User 3, the recommendations are Havahart Critter Ridder, Lickety Stik (dog treat), another Lickety Stik, Bacon Flavor Lickety Stik, still another Lickety Stik treat. Clearly the products are similar.
+
+***
+<br>
+
+## 7. User-based collaborative filtering
+
+The User-based collaborate filtering recommends items based on whether similar users purchased or rated them similarly. For each user, these steps are taken:
+
+1. Measure how similar each user is to other users. As with IBCF, popular similarity measures are Pearson correlation and cosine similarity.
+2. Identify the most similar users. Choices can be based similarity to the top k users (k-nearest_neighbors) or users above a defined similarity threshold.
+3. Rate the items purchased by the most similar users, either by averaging or weighting the nearest users.
+4. Pick the top-rated items.
+
+### 7.1 Building the UBCF model
+
+We'll use UBCF and cosine similarity model our training data. The data is automatically normalized to control for rating bias.  
+
+```{r eval=T, message=F, warning=F}
+
+# The method computes the similarity between users with cosine
+recc_model2 <- Recommender(data = recc_data_train, method = "UBCF")
+
+# A UBCF recommender has now been created
+model2_details <- getModel(recc_model2)
+
+print("Summary of UBCF matrix")
+
+model2_details$data
+
+names(model2_details)
+
+```
+
+### 7.2 Predictions on the test set.
+
+As with IBCF, we use the model to predict a Top 5 list for each user.
+
+```{r eval=T, warning=F, message=F}
+
+# predict on test set
+recc2_predicted <- predict(object = recc_model2, newdata = recc_data_test, n = n_recommended)
+
+# Let's define a list with the recommendations to the test set users.
+recc2_matrix <- sapply(recc2_predicted@items, function(x) {
+  colnames(ratings_foods)[x]
+})
+
+# Again, let's look at the first three users:
+#
+top3 <- recc2_matrix[1:3]
+top3
+
+```
+
+#### 7.2.1 Exploration
+
+Using UBCF, we still get zero recommendations for user 2, but the recommendations for users 1 and 3 are different.
+
+Top 5 UBCF items for User 1 are Honey Maid Grahams, Velveeta Cheeseburger Skillets, Lipton's Herbal Pyramid Tea, Newman's Own Dog Treats, and Shake N Bake. None of these products was on the IBCF list for this user.
+
+Top 5 UBCF items for User 2 are Nabisco SnackWell Fudge Drizzled Caramel Popcorn, Velveeta Cheeseburger Skillets, Honey Maid Grahams, Back To Nature Golden Honey Oat Grahams and Higgins & Burke Earl Grey tea. Again, none of these products was recommended by IBCF for this user.
+
+***
+<br>
+
+## 8. Evaluating the Different Recommender Models
+
+We've built models based on popularity, similarity between items and similarity between users. How do we know which method predicts the best? How do we decide which one to use? Fortunately, there are ways to make this determination by calculating error rates, precision and accuracy. That is our next step. We'll use k-fold resampling to improve the accuracy of our results. We start by creating an evaluation scheme that is then applied to our ratings matrix. We set our threshold for a positive rating to 4 or 5.
+
+```{r eval=T, warning=F, message=F}
+
+# We can split the data into some chunks, take a chunk out as the test set, and evaluate the accuracy. Then we can do the same with each other chunk and comput the average accuracy.
+
+n_fold <- 4
+rating_threshold <- 4 # threshold at which we consider the item to be good
+items_to_keep <- 20 # arbitrary number. This was chosen as it was less than rowCounts(r) < 30
+eval_sets <- evaluationScheme(data = ratings_foods1,
+                              method = "cross-validation", k = n_fold,
+                              given = items_to_keep, goodRating = rating_threshold)
+
+size_sets <-sapply(eval_sets@runsTrain, length)
+
+```
+
+### 8.1 IBCF Model and Evaluation
+
+The next step builds our model, tests it and computes the following:
+
+1. Root mean square error (RMSE): The standard deviation of the difference between the real and predicted ratings.
+2. Mean squared error (MSE): The mean of the squared difference between the real and predicted ratings.
+3. Mean absolute error (MAE): This is the mean of the absolute difference between the real and predicted ratings.
+
+The higher the error, the worse the model performs.
+
+```{r eval=T, warning=F, message=F}
+# name our models
+model_to_evaluate <- "IBCF"
+model_parameters <- NULL
+
+eval_recommender <-Recommender(data = getData(eval_sets, "train"), method = model_to_evaluate, parameter = model_parameters)
+
+# As before, we need to specify how many items we want to recommend: 5.
+items_to_recommend <- 5
+
+# We can build the matrix with the predicted ratings using the predict function:
+eval_prediction <- predict(object = eval_recommender, newdata = getData(eval_sets, "known"), n = items_to_recommend, type = "ratings")
+
+# calcPredictionAccuracy, we can computes the Root mean square error (RMSE), Mean squared error (MSE), and the Mean absolute error (MAE).
+eval_accuracy <- calcPredictionAccuracy(
+  x = eval_prediction, data = getData(eval_sets, "unknown"), byUser = TRUE
+)
+
+# This is a small sample of the results for the Prediction and Accuracy
+kable(head(eval_accuracy), caption="Sample User Prediction Accuracy, IBCF")
+
+# Now, let's take a look at the RMSE by each user
+# qplot(eval_accuracy[,"RMSE"]) + geom_histogram(binwidth = 0.1) +
+  # ggtitle("Distribution of the RMSE by user")
+
+# We need to evaluate the model as a whole, so we will set the byUser to False
+eval_accuracy <- calcPredictionAccuracy(
+  x = eval_prediction, data = getData(eval_sets, "unknown"), byUser = FALSE
+)
+
+# for IBCF
+kable(eval_accuracy, caption="Overall Error, IBCF")
+
+```
+
+### 8.2 Confusion Matrix for IBCF Evalulation  
+
+A confusion matrix allows us to examine accuracy by computing and comparing true positive, false positive, true negative and false negative rates. The definitions are:
+
+* True Positive: Recommended items that were rated 4/5 (our threshold).
+* False Postive: Recommended items that didn't have a 4/5.
+* True Negative: Not recommended but were highly rated.
+* False Negative: Not recommended and had a low rating.
+
+Recall (also called sensitivity) is the probability of getting a positive recommendation when the item has a positive rating. It is the ratio of the number of relevant items recommended to the total number of relevant items.
+
+Specificity is the probability of getting a negative recommendation when the true rating is negative.
+
+Precision is the ratio of correctly recommended items identified to all items, whether useful or not.
+
+An ROC curve (for receiver operating curve, an archaic usage), charts Recall against Specificity. Models that have the largest area under the ROC curve have better performance -- the highest probability of a correct (useful or relevant) recommendation. AUC is the fundamental statistic for comparison. We test the model using k= 10, 20, etc. in multiples of 10 items used to compute similarity.
+
+#### 8.2.1 Construct confusion matrix
+
+```{r}
+# Confusion matrix construction
+results <- evaluate(x = eval_sets, method = model_to_evaluate, n = seq(10, 100, 10))
+
+# results is an evaluationResults object containing the results of the evaluation.
+# Each element of the list corresponds to a different split of the k-fold.
+# Let's look at the first element
+
+kable(head(getConfusionMatrix(results)[[1]]))
+
+# If we want to take account of all the splits at the same time, we can just sum up the indices:
+
+columns_to_sum <- c("TP", "FP", "FN", "TN")
+indices_summed <- Reduce("+", getConfusionMatrix(results))[, columns_to_sum]
+
+kable(head(indices_summed))
+
+# Building an ROC curve. Will need these factors
+# 1. True Positive Rate (TPR): Percentage of purchased items that have been recommended. TP/(TP + FN)
+# 2. False Positive Rate (FPR): Percentage of not purchased items that have been recommended. FP/(FP + TN)
+plot(results, annotate = TRUE, main = "ROC curve")
+
+# We can also look at the accuracy metrics as well
+# Precision: Percentage of recommended items that have been purchased. FP/(TP + FP)
+# Recall: Percentage of purchased items that have been recommended. TP/(TP + FN) = True Positive Rate
+
+plot(results, "prec/rec", annotate = TRUE, main = "Precision-Recall")
+```
+
+### 8.3 Comparing multiple models
+
+We have shown how to evaluate one model, but multiple models can be evaluated and their performance compared. AUC is our benchmark statistic.
+
+Using k-fold sampling, we will build 5 models and store the results as eval_sets. The models are:
+
+* Item-based collaborative filtering, using the cosine similarity.
+* Item-based collaborative filtering, using the Pearson correlation.
+* User-based collaborative filtering, using the cosine similarity.
+* User-based collaborative filtering, using the Pearson correlation.
+* Random recommendations for a baseline.
+
+```{r eval=T, warning=F, message=F}
+
+# a list of models and parameters
+models_to_evaluate <- list(
+  IBCF_cos = list(name = "IBCF", param = list(method = "cosine")),
+  IBCF_cor = list(name = "IBCF", param = list(method = "pearson")),
+  UBCF_cos = list(name = "UBCF", param = list(method = "cosine")),
+  UBCF_cor = list(name = "UBCF", param = list(method = "pearson")),
+  Random = list(name = "RANDOM", param = NULL))
+
+# We will test with varying numbers of items.
+n_recommendations <- c(1,5,seq(10,100,10))
+
+# Now let's run using recommenderlab's evaluate function
+list_results <- evaluate(x = eval_sets, method = models_to_evaluate, n = n_recommendations)
+
+# We can extract the related average confusion matrices
+avg_matrices <- lapply(list_results, avg)
+
+```
+
+#### 8.3.1 Confusion matrix, IBCF cosine similarity
+
+We can explore the performance evaulation, for example, IBCF with Cosine distance. The true positive ratio increases with the number of recommendations. But it's not high in any case at ~22 percent. (Note that TPR and Recall are the same.)
+
+```{r eval=T, message=F, warning=F}
+
+kable(head(avg_matrices$IBCF_cos[, 5:8]))
+
+```
+
+#### 8.3.2 Identifying the best performer
+
+We can compare the models with an ROC plot. The largest AUC is IBCF with Pearson correlation; as expected, all the models are far superior to a random selection. UBCF with Pearson correlation is the best performer up to ~ k=35, when it is overtaken by IBCF Pearson. 
+
+```{r eval=T, message=F, warning=F}
+
+plot(list_results, annotate = 1, legend = "topleft")
+title("ROC curve, Five Models")
+
+```
+
+#### 8.3.3 Precision-recall plot
+As intuition suggests, precision -- the percentage of correctly recommended (useful) items out of all items -- is high when there is a small number of recommendations. Precision drops as the number of recommendations increases, but recall improves -- i.e., the ratio of useful recommendations out of all relevant items. For our data, the models appear to converge at approximately k=35.
+
+```{r}
+plot(list_results, "prec/rec", annotate = 1, legend = "topright", ylim = c(0,0.4))
+title("Precision-recall")
+```
+
+### 8.4 Best model
+Our plots show that User-based collaborative filtering using Pearson correlation as the similarity measure is the most robust model when only a small number of recommendations are required. By comparision, the IBCF models perform better when k > ~35. For reasons of computing efficiency, we select UBCF-Pearson as our preferred model.
+
+```{r eval=T, warning=F, message=F}
+
+kable(head(avg_matrices$UBCF_cor[, 5:8]))
+
+```
+
+
+***
+<br>
+
+## 9. Conclusion
+Our exploration of recommender systems used User-Based Collaborative Filtering (UBCF), Item-Based Collaborative Filtering (IBCF) and three different similarity measures to select items for consumers buying fine foods on Amazon. We determined that UBCF using Pearson correlation similarity measure was the most accurate model, producing higher specificity particularly when the number of recommendations is small (n < 30).
+
+The **Recommenderlab** package we relied on provides many more options for refining models, inclduing Support Vector Machines, k-nearest neighbors, and Singular Value Decomposition. We were able to explore many of the package functions as a means of deepening our understanding of classification techniques and concepts. All the same, this small-scale study barely scratched the surface of this domain.
+
+***
+<br>
+
+## 10. References
+
+**Texts**
+  
+Hahsler, M., "[Developing and Testing Top-N Recommendation Algorithms
+for 0-1 Data using recommenderlab](http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.475.7044&rep=rep1&type=pdf)", February 27, 2011.
+
+Gorakala, Suresh K.; Usuelli, Michele. "Building a Recommendation System with R" (Kindle Location 1096). Packt Publishing. Kindle Edition.
+
+**Recommenderlab Vingettes**
+  
+[Using-recommenderlab-for-predicting-ratings-for-movielens-data](https://ashokharnal.wordpress.com/2014/12/18/using-recommenderlab-for-predicting-ratings-for-movielens-data/)
+
+[Recommenderlab package](https://cran.r-project.org/web/packages/recommenderlab/vignettes/recommenderlab.pdf)
+
+**Data**
+[Kaggle Data](https://www.kaggle.com/snap/amazon-fine-food-reviews)
+
+[Book-Crossing Data](http://www2.informatik.uni-freiburg.de/~cziegler/BX/)
+
+**Recommender Systems**
+
+[Chapter 2: Data Mining Methods for Recommender Systems](http://www.springer.com/cda/content/document/cda_downloaddocument/9780387858197-c1.pdf?SGWID=0-0-45-1007442-p173841681), Amatrian, X., et al. 2011
+
+
+[Recommender Systems, Pouly, M.](http://www.springer.com/cda/content/document/cda_downloaddocument/9780387858197-c1.pdf?SGWID=0-0-45-1007442-p173841681), 2014
+
+**R-Bloggers**
+
+[Recommender Systems 101](https://www.r-bloggers.com/recommender-systems-101-a-step-by-step-practical-example-in-r/)
+
+***
+<br>
+
+## Appendix I
+
+
+```{r eval=F, include=T}
+knitr::opts_chunk$set(echo = TRUE)
+
+ipak <- function(pkg){
+    new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+    if (length(new.pkg))
+        install.packages(new.pkg, dependencies = TRUE)
+    sapply(pkg, require, character.only = TRUE)
+}
+
+# make a package list
+packages <- c('tidyverse', 'RPostgreSQL', 'data.table', 'stringr', 'readr', 'recommenderlab', 'ggthemes', 'knitr', 'kableExtra', 'tidytext', 'tm', 'tokenizers', 'caTools', 'caret', 'tau', 'e1071', 'caTools')
+
+# load 'em
+ipak(packages)
+
+```
+
+### 1. Clean up, tokenize 'summary' variable  
+
+```{r eval=F, message=F, warning=F}
+
+load("data4.rda")
+
+# clean up data using bespoke function
+# changes to lower case, eliminates punctionation, tokenizes
+
+# regex to remove punctuation; note perl switch
+cleanup_exp <- '[^a-z ]+'
+
+cleanup <- function(sentence) {
+  sentence <- tolower(sentence)
+  sentence <- gsub(cleanup_exp, "", sentence, perl=T)
+  sentence <- removeWords(sentence, stopwords('en'))
+  sentence <- unlist(tokenize_sentences(sentence))
+}
+
+# create clean summaries in separate df
+summaries <- data.frame(data4$Sentiment, data4$combine_summary)
+
+# run cleanup function
+summaries$clean_summary <- lapply(summaries[,2], cleanup)
+summaries$clean_summary <- unlist(summaries$clean_summary)
+colnames(summaries) <- c("Sentiment", "Summary", "Clean_summary")
+
+# summaries$Clean_summary <- removeWords(summaries$Clean_summary, stopwords('en'))
+
+# save(summaries, file="summaries.rda")
+
+
+# summaries becomes original data table for sentiment analysis
+# can get rid of the original text column
+# summaries <- summaries[, -2]
+```
+
+### 2. Make a document-term matrix
+
+```{r eval=F, message=F, warning=F}
+
+# make train, test sets
+## 75% of the sample size
+smp_size <- floor(0.75 * nrow(summaries))
+
+## set the seed to reproduce
+set.seed(123)
+train_index <- sample(seq_len(nrow(summaries)), size = smp_size)
+
+train <- summaries[train_index, ]
+test <- summaries[-train_index, ]
+
+corpus <- Corpus(VectorSource(c(train$Clean_summary, test$Clean_summary)))
+
+#create the ungodly huge dtm; this takes forever in R but is lightning fast in Python with sckikit
+dtm <- DocumentTermMatrix(corpus)
+
+# nbow shrink it; good at 96 terms
+sparse <- removeSparseTerms(dtm, 0.65)
+save(sparse, file="sparse.rda")
+
+```
+
+### 3. We have a sparse matrix that can now be fed to a classifier.
+
+```{r eval=F, message=F, warning=F}
+
+load("summaries.rda")
+load("sparse.rda")
+
+# Now we want to convert this matrix into a data frame that we can use to train a classifier in the next section.
+important_words_df <- as.data.frame(as.matrix(sparse))
+colnames(important_words_df) <- make.names(colnames(important_words_df))
+
+# split into train and test
+important_words_train_df <- head(important_words_df, nrow(train))
+important_words_test_df <- tail(important_words_df, nrow(test))
+
+# continue to model building
+# table(summaries$Sentiment)
+
+# Add to original dataframes
+train_data_words_df <- cbind(train, important_words_train_df)
+test_data_words_df <- cbind(test, important_words_test_df)
+
+# Get rid of the original Text fields
+train_data_words_df$Clean_summary <- NULL
+test_data_words_df$Clean_summary <- NULL
+train_data_words_df$Summary <- NULL
+test_data_words_df$Summary <- NULL
+
+set.seed(1234)
+# first we create an index with 80% True values based on Sentiment
+spl <- sample.split(train_data_words_df$Sentiment, 0.80)
+
+# now we use it to split our data into train and test
+eval_train_data_df <- train_data_words_df[spl==T,]
+eval_test_data_df <- train_data_words_df[spl==F,]
+
+
+# try caret and knn; no good also bombs
+# trctrl <- trainControl(method = "cv", number = 4)
+
+# knn_fit <- train(Sentiment ~., data = eval_train_data_df,
+#                 method = "knn",
+#                 trControl=trctrl,
+#                 preProcess = c("center", "scale"),
+#                 tuneLength = 10)
+
+# try support vector machine
+set.seed(1234)
+
+fit.svm <- svm(Sentiment~., data=eval_train_data_df[c(1:10000),])
+
+svm.pred <- predict(fit.svm, na.omit(eval_test_data_df[c(1:10000),]))
+svm.perf <- table(eval_test_data_df$Sentiment[1:10000], svm.pred,
+                  dnn=c('Actual', 'Predicted'))
+
+svm.perf
+
+performance <- function(table, n=2){
+  if(!all(dim(table) == c(2,2)))
+  stop("Must be a 2 x 2 table")
+  tn = table[1,1]
+  fp = table[1,2]
+  fn = table[2,1]
+  tp = table[2,2]
+  sensitivity = tp/(tp+fn)
+  specificity = tn/(tn+fp)
+  ppp = tp/(tp+fp)
+  npp = tn/(tn+fn)
+  hitrate = (tp+tn)/(tp+tn+fp+fn)
+  result <- paste("Sensitivity = ", round(sensitivity, n) ,
+             "\nSpecificity = ", round(specificity, n),
+             "\nPositive Predictive Value = ", round(ppp, n),
+             "\nNegative Predictive Value = ", round(npp, n),
+             "\nAccuracy = ", round(hitrate, n), "\n", sep="")
+  cat(result)
+}
+
+performance(svm.perf)
+
+#> performance(svm.perf)
+
+# Sensitivity = 0.99
+# Specificity = 0.04
+# Positive Predictive Value = 0.78
+# Negative Predictive Value = 0.48
+# Accuracy = 0.78
+
+
+# logistic model
+# log_model <- glm(Sentiment~., data=eval_train_data_df, family=binomial)
+
+# log.probs <- predict(log_model, eval_test_data_df, type="response")
+
+# log.probs[1:5]
+
+# log.pred <- rep(0, length(log.probs))
+# log.pred[log.probs > 0.5] <- 1
+
+# log.pred[1:5]
+
+# log.perf <- table(eval_test_data_df$Sentiment,
+                  # log.pred,
+                  # dnn=c('Actual', 'Predicted'))
+# log.perf
+
+# performance(log.perf)
+
+```
